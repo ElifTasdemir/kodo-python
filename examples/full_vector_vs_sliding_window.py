@@ -12,7 +12,7 @@ import random
 import kodo
 
 
-def benchmark(encoder, decoder, channel_condition):
+def benchmark(encoder, decoder, channel_condition, data_availablity):
     """Full vector vs sliding window benchmark."""
     # Create some data to encode. In this case we make a buffer
     # with the same size as the encoder's block size (the max.
@@ -29,19 +29,25 @@ def benchmark(encoder, decoder, channel_condition):
 
     results = {}
     ticks = 0
+    packet = None
     while not decoder.is_complete():
         ticks += 1
         rank = encoder.rank()
-        if rank < encoder.symbols():
+        # Is new data available?
+        if rank < encoder.symbols() and random.random() < data_availablity:
             encoder.set_const_symbol(rank, symbol_storage[rank])
+            # regardless of the codec we can always send the data systematic
+            # rightway.
+            packet = encoder.write_payload()
+        else:
+            got_all_data = (rank == encoder.symbols())
+            is_sliding_window = hasattr(encoder, 'read_feedback')
+            if got_all_data or is_sliding_window:
+                # Encode a packet into the payload buffer
+                packet = encoder.write_payload()
 
-        # Check if we can start the transmission before having all the data.
-        # if not hasattr(encoder, 'read_feedback') and \
-        #    rank != encoder.symbols():
-        #     continue
-
-        # Encode a packet into the payload buffer
-        packet = encoder.write_payload()
+        if packet is None:
+            continue
 
         # Send the data to the decoders, here we just for fun
         # simulate that we are loosing 50% of the packets
@@ -52,7 +58,10 @@ def benchmark(encoder, decoder, channel_condition):
             for symbol_index in range(encoder.symbols()):
                 if symbol_index in results:
                     continue
-                if decoder.is_symbol_uncoded(symbol_index):
+                decoder_symbol = decoder.copy_from_symbol(symbol_index)
+                encoder_symbol = symbol_storage[symbol_index]
+                # if decoder.is_symbol_uncoded(symbol_index):
+                if decoder_symbol == encoder_symbol:
                     results[symbol_index] = ticks
 
         if not hasattr(encoder, 'read_feedback'):
@@ -112,12 +121,16 @@ def main():
 
     # Set the channel condition
     channel_condition = 0.2
+    # Set data availablity
+    data_availablity = 0.2
 
     full_vector_results = benchmark(
-        full_vector_encoder, full_vector_decoder, channel_condition)
+        full_vector_encoder, full_vector_decoder, channel_condition,
+        data_availablity)
 
     sliding_window_results = benchmark(
-        sliding_window_encoder, sliding_window_decoder, channel_condition)
+        sliding_window_encoder, sliding_window_decoder, channel_condition,
+        data_availablity)
 
     assert full_vector_results is not None
     assert sliding_window_results is not None
